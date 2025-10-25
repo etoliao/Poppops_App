@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cancer Treatment Countdown</title>
+<style>
+  :root{
+    --bg:#0f172a;--card:#111827;--muted:#94a3b8;--text:#e5e7eb;--border:#1f2937;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px 16px 64px}
+  header{display:flex;flex-direction:column;gap:4px;margin:12px 0 16px}
+  header h1{font-size:clamp(22px,3.5vw,32px);margin:0}
+  header p{color:var(--muted);margin:0}
+  .cards{display:grid;gap:12px;grid-template-columns:repeat(4,1fr)}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px}
+  .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  .value{font-size:clamp(18px,3.2vw,26px);font-weight:600;margin-top:4px}
+  .delta{color:var(--muted);font-size:13px}
+  .section{margin-top:22px}
+  .section h2{font-size:clamp(18px,2.8vw,22px);margin:0 0 8px}
+  .pillrow{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 14px}
+  .pill{border:1px solid var(--border);border-radius:999px;padding:6px 10px;cursor:pointer;color:var(--muted);background:transparent;font-size:14px;user-select:none}
+  .pill.active{background:var(--border);color:var(--text)}
+  .next{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  thead th{font-weight:600;text-align:left;font-size:13px;color:var(--muted);padding:10px;border-bottom:1px solid var(--border)}
+  tbody td{padding:10px;border-bottom:1px solid var(--border);font-size:14px}
+  tbody tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--border)}
+  .tag.green{background:rgba(34,197,94,.12);color:#86efac;border-color:rgba(34,197,94,.35)}
+  .tag.blue{background:rgba(96,165,250,.12);color:#bfdbfe;border-color:rgba(96,165,250,.35)}
+  .tag.purple{background:rgba(168,85,247,.12);color:#e9d5ff;border-color:rgba(168,85,247,.35)}
+  footer{margin-top:28px;color:var(--muted);font-size:12px}
+  @media (max-width:960px){.cards{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:520px){
+    .cards{grid-template-columns:1fr}
+    .value{font-size:20px}
+    table thead{display:none}
+    table,tbody,tr,td{display:block;width:100%}
+    tbody tr{border-bottom:1px solid var(--border)}
+    tbody td{display:flex;justify-content:space-between;gap:12px}
+    tbody td::before{content:attr(data-label);color:var(--muted)}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>⏳ Cancer Treatment Countdown</h1>
+    <p>Chemo on Fridays • Radiation Monday–Friday • 8 weeks starting Oct 20, 2025<br>
+       (No radiation on Thu Oct 23, 2025 and Fri Oct 24, 2025)</p>
+  </header>
+
+  <div class="cards" id="topCards"></div>
+
+  <div class="section">
+    <h2>Next Session</h2>
+    <div class="next" id="nextBox">Calculating…</div>
+  </div>
+
+  <div class="section">
+    <h2>Schedule</h2>
+    <div class="pillrow">
+      <div class="pill active" data-view="remaining">Remaining only</div>
+      <div class="pill" data-view="completed">Completed only</div>
+      <div class="pill" data-view="full">Full plan</div>
+    </div>
+    <div id="tableWrap"></div>
+  </div>
+
+  <footer>
+    Fully responsive—works great on phones and desktops. Dates are based on your local timezone.
+  </footer>
+</div>
+
+<script>
+/* --- Config --- */
+const START = new Date(Date.UTC(2025, 9, 20)); // Mon Oct 20, 2025 (UTC midnight)
+const WEEKS = 8;
+
+/* Radiation exceptions (skip radiation on these dates).
+   Format: 'YYYY-MM-DD' (UTC). */
+const RADIATION_SKIP = new Set([
+  '2025-10-23', // Thu
+  '2025-10-24'  // Fri (chemo still occurs on this day)
+]);
+
+/* If you ALSO want to skip chemo on Fri 2025-10-24, uncomment the next line: */
+// const CHEMO_SKIP = new Set(['2025-10-24']);
+const CHEMO_SKIP = new Set(); // default: chemo happens on all Fridays
+
+/* --- Helpers --- */
+const pad2 = n => String(n).padStart(2,'0');
+const toKey = d => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth()+1)}-${pad2(d.getUTCDate())}`;
+const fmt = d => d.toLocaleDateString(undefined,{year:'numeric',month:'long',day:'2-digit',weekday:'long'});
+const fmtShort = d => d.toLocaleDateString(undefined,{month:'2-digit',day:'2-digit',year:'numeric'});
+const wd = d => d.getUTCDay(); // 0=Sun .. 6=Sat (UTC to keep date logic stable)
+const addDaysUTC = (d,n)=> new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()+n));
+
+/* Build per-day plan: fields: date, weekdayName, radiation(bool), chemo(bool), both(bool) */
+function buildPlan(startDate, weeks){
+  const days = weeks*7;
+  const rows = [];
+  for(let i=0;i<days;i++){
+    const d = addDaysUTC(startDate, i);
+    const day = wd(d); // 1..5 are Mon..Fri
+    if (day>=1 && day<=5){
+      const key = toKey(d);
+      const isFriday = (day===5);
+      const radiation = !RADIATION_SKIP.has(key);               // skip on specified dates
+      const chemo = isFriday && !CHEMO_SKIP.has(key);           // chemo only on Fridays unless skipped
+      rows.push({
+        date: d,
+        weekdayName: d.toLocaleDateString(undefined,{weekday:'long'}),
+        radiation,
+        chemo,
+        both: radiation && chemo
+      });
+    }
+  }
+  return rows;
+}
+
+/* Split completed vs remaining (remaining includes today) */
+function splitProgress(rows, todayLocalMidnight){
+  const completed = rows.filter(r => r.date < todayLocalMidnight);
+  const remaining = rows.filter(r => r.date >= todayLocalMidnight);
+  return {completed, remaining};
+}
+
+/* Counts */
+function counts(rows){
+  const radiation = rows.filter(r => r.radiation).length;
+  const chemo = rows.filter(r => r.chemo).length;
+  const days = rows.length;
+  const both = rows.filter(r => r.both).length;
+  return {radiation, chemo, days, both};
+}
+
+/* Calendar days left until last treatment date (not inclusive) */
+function calendarDaysLeft(lastDate, todayLocalMidnight){
+  const ms = lastDate - todayLocalMidnight;
+  return Math.max(0, Math.floor(ms / (1000*60*60*24)));
+}
+
+/* UI builders */
+function metricCard(label, value, deltaText){
+  return `
+    <div class="card">
+      <div class="label">${label}</div>
+      <div class="value">${value}</div>
+      ${deltaText? `<div class="delta">${deltaText}</div>`:''}
+    </div>
+  `;
+}
+
+function renderTop(plan, completed, remaining, today){
+  const endDate = plan[plan.length-1]?.date ?? START;
+  const calLeft = calendarDaysLeft(endDate, today);
+  const totals = counts(plan);
+  const comp = counts(completed);
+  const rem = counts(remaining);
+
+  const top = document.getElementById('topCards');
+  top.innerHTML = [
+    metricCard('Start', fmt(START)),
+    metricCard('Planned End', fmt(endDate)),
+    metricCard('Calendar Days Left', `${calLeft}`),
+    metricCard('Today', fmt(today))
+  ].join('');
+
+  const row2 = document.createElement('div');
+  row2.className = 'cards';
+  row2.style.marginTop = '12px';
+  row2.innerHTML = [
+    metricCard('Radiation (Total)', totals.radiation, `-${rem.radiation} left`),
+    metricCard('Chemo (Total)', totals.chemo, `-${rem.chemo} left`),
+    metricCard('Treatment Days (Total)', totals.days, `-${rem.days} left`),
+    metricCard('BOTH Days (Fridays)', totals.both, `-${rem.both} left`)
+  ].join('');
+  top.after(row2);
+}
+
+function renderNext(remaining, today){
+  const box = document.getElementById('nextBox');
+  if (!remaining.length){
+    box.innerHTML = `<strong>All sessions are complete. 🎉</strong>`;
+    return;
+  }
+  const n = remaining[0];
+  const diff = Math.floor((n.date - today)/(1000*60*60*24));
+  const when = diff===0 ? 'today' : `in ${diff} day(s)`;
+  const types = [];
+  if (n.radiation) types.push('Radiation');
+  if (n.chemo) types.push('Chemo');
+  box.innerHTML = `<strong>${types.join(', ') || 'No treatment'}</strong> on <strong>${fmt(n.date)}</strong> — ${when}`;
+}
+
+function renderTable(rows){
+  const wrap = document.getElementById('tableWrap');
+  if (!rows.length){
+    wrap.innerHTML = `<div class="card" style="padding:14px;">No rows to display for this view.</div>`;
+    return;
+  }
+  let html = `
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Weekday</th>
+          <th>Radiation</th>
+          <th>Chemo</th>
+          <th>Both</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  for (const r of rows){
+    html += `
+      <tr>
+        <td data-label="Date">${fmtShort(r.date)}</td>
+        <td data-label="Weekday">${r.weekdayName}</td>
+        <td data-label="Radiation">${r.radiation? '<span class="tag green">Yes</span>':'<span class="tag">No</span>'}</td>
+        <td data-label="Chemo">${r.chemo? '<span class="tag blue">Yes</span>':'<span class="tag">No</span>'}</td>
+        <td data-label="Both">${r.both? '<span class="tag purple">Yes</span>':'<span class="tag">No</span>'}</td>
+      </tr>
+    `;
+  }
+  html += `</tbody></table>`;
+  wrap.innerHTML = html;
+}
+
+function activatePills(plan, completed, remaining, today){
+  const pills = Array.from(document.querySelectorAll('.pill'));
+  function setActive(target){
+    pills.forEach(p=>p.classList.toggle('active', p===target));
+    const view = target.getAttribute('data-view');
+    if (view==='remaining') renderTable(remaining);
+    else if (view==='completed') renderTable(completed);
+    else renderTable(plan);
+  }
+  pills.forEach(p => p.addEventListener('click', ()=>setActive(p)));
+  setActive(pills[0]); // default: Remaining
+}
+
+/* --- Main init --- */
+(function init(){
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // local midnight
+
+  const plan = buildPlan(START, WEEKS);
+  const {completed, remaining} = splitProgress(plan, today);
+
+  renderTop(plan, completed, remaining, today);
+  renderNext(remaining, today);
+  activatePills(plan, completed, remaining, today);
+})();
+</script>
+</body>
+</html>
