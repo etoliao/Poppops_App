@@ -50,8 +50,8 @@
 <div class="wrap">
   <header>
     <h1>⏳ Cancer Treatment Countdown</h1>
-    <p>Chemo on Fridays • Radiation Monday–Friday • Ends December 15, 2025<br>
-       (No treatment on weekends)</p>
+    <p>Chemo on Fridays (ends Nov 28) • Radiation Mon-Fri (ends Dec 15)<br>
+       No treatment on weekends</p>
   </header>
 
   <div class="cards" id="topCards"></div>
@@ -59,6 +59,11 @@
   <div class="section">
     <h2>Next Session</h2>
     <div class="next" id="nextBox">Calculating…</div>
+  </div>
+
+  <div class="section">
+    <h2>Treatment Progress</h2>
+    <div class="cards" id="progressCards"></div>
   </div>
 
   <div class="section">
@@ -79,16 +84,8 @@
 <script>
 /* --- Config --- */
 const START = new Date(Date.UTC(2025, 9, 20)); // Mon Oct 20, 2025 (UTC midnight)
-const END_DATE = new Date(Date.UTC(2025, 11, 15)); // Dec 15, 2025 (UTC midnight)
-
-/* Radiation exceptions (skip radiation on these dates).
-   Format: 'YYYY-MM-DD' (UTC). */
-const RADIATION_SKIP = new Set([
-  // No specific radiation skip dates - only weekends are skipped
-]);
-
-/* If you ALSO want to skip chemo on specific dates, add them here: */
-const CHEMO_SKIP = new Set(); // default: chemo happens on all Fridays
+const CHEMO_END = new Date(Date.UTC(2025, 10, 28)); // Nov 28, 2025
+const RADIATION_END = new Date(Date.UTC(2025, 11, 15)); // Dec 15, 2025
 
 /* --- Helpers --- */
 const pad2 = n => String(n).padStart(2,'0');
@@ -98,19 +95,21 @@ const fmtShort = d => d.toLocaleDateString(undefined,{month:'2-digit',day:'2-dig
 const wd = d => d.getUTCDay(); // 0=Sun .. 6=Sat (UTC to keep date logic stable)
 const addDaysUTC = (d,n)=> new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()+n));
 
-/* Build per-day plan from start to end date, excluding weekends */
-function buildPlan(startDate, endDate){
+/* Build treatment plan */
+function buildPlan(){
   const rows = [];
-  let currentDate = new Date(startDate);
+  let currentDate = new Date(START);
+  const lastDate = new Date(RADIATION_END);
   
-  while(currentDate <= endDate){
-    const day = wd(currentDate); // 0=Sun, 1=Mon, ..., 6=Sat
+  while(currentDate <= lastDate){
+    const day = wd(currentDate);
     // Only include weekdays (Monday-Friday)
     if(day >= 1 && day <= 5){
-      const key = toKey(currentDate);
       const isFriday = (day === 5);
-      const radiation = !RADIATION_SKIP.has(key);               // skip on specified dates
-      const chemo = isFriday && !CHEMO_SKIP.has(key);           // chemo only on Fridays unless skipped
+      const dateInRange = new Date(currentDate);
+      const radiation = dateInRange <= RADIATION_END;
+      const chemo = isFriday && dateInRange <= CHEMO_END;
+      
       rows.push({
         date: new Date(currentDate),
         weekdayName: currentDate.toLocaleDateString(undefined,{weekday:'long'}),
@@ -125,23 +124,33 @@ function buildPlan(startDate, endDate){
   return rows;
 }
 
-/* Split completed vs remaining (remaining includes today) */
+/* Split completed vs remaining */
 function splitProgress(rows, todayLocalMidnight){
   const completed = rows.filter(r => r.date < todayLocalMidnight);
   const remaining = rows.filter(r => r.date >= todayLocalMidnight);
   return {completed, remaining};
 }
 
-/* Counts */
-function counts(rows){
-  const radiation = rows.filter(r => r.radiation).length;
-  const chemo = rows.filter(r => r.chemo).length;
-  const days = rows.length;
-  const both = rows.filter(r => r.both).length;
-  return {radiation, chemo, days, both};
+/* Count treatment sessions */
+function countSessions(rows){
+  const totalRadiation = rows.filter(r => r.radiation).length;
+  const totalChemo = rows.filter(r => r.chemo).length;
+  const completedRadiation = rows.filter(r => r.radiation && r.date < new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())).length;
+  const completedChemo = rows.filter(r => r.chemo && r.date < new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())).length;
+  const remainingRadiation = totalRadiation - completedRadiation;
+  const remainingChemo = totalChemo - completedChemo;
+  
+  return {
+    totalRadiation,
+    totalChemo,
+    completedRadiation,
+    completedChemo,
+    remainingRadiation,
+    remainingChemo
+  };
 }
 
-/* Calendar days left until last treatment date (not inclusive) */
+/* Calendar days left until last treatment date */
 function calendarDaysLeft(lastDate, todayLocalMidnight){
   const ms = lastDate - todayLocalMidnight;
   return Math.max(0, Math.floor(ms / (1000*60*60*24)));
@@ -158,31 +167,40 @@ function metricCard(label, value, deltaText){
   `;
 }
 
-function renderTop(plan, completed, remaining, today){
-  const endDate = plan[plan.length-1]?.date ?? START;
-  const calLeft = calendarDaysLeft(endDate, today);
-  const totals = counts(plan);
-  const comp = counts(completed);
-  const rem = counts(remaining);
+function progressCard(label, completed, total, type){
+  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+  return `
+    <div class="card">
+      <div class="label">${label}</div>
+      <div class="value">${completed}/${total}</div>
+      <div class="delta">${percentage}% complete • ${total - completed} left</div>
+    </div>
+  `;
+}
+
+function renderTop(plan, today){
+  const chemoEnd = plan.filter(r => r.chemo).pop()?.date || CHEMO_END;
+  const radiationEnd = plan.filter(r => r.radiation).pop()?.date || RADIATION_END;
+  const calLeft = calendarDaysLeft(radiationEnd, today);
 
   const top = document.getElementById('topCards');
   top.innerHTML = [
     metricCard('Start', fmt(START)),
-    metricCard('Planned End', fmt(endDate)),
-    metricCard('Calendar Days Left', `${calLeft}`),
+    metricCard('Chemo Ends', fmt(chemoEnd)),
+    metricCard('Radiation Ends', fmt(radiationEnd)),
     metricCard('Today', fmt(today))
   ].join('');
+}
 
-  const row2 = document.createElement('div');
-  row2.className = 'cards';
-  row2.style.marginTop = '12px';
-  row2.innerHTML = [
-    metricCard('Radiation (Total)', totals.radiation, `-${rem.radiation} left`),
-    metricCard('Chemo (Total)', totals.chemo, `-${rem.chemo} left`),
-    metricCard('Treatment Days (Total)', totals.days, `-${rem.days} left`),
-    metricCard('BOTH Days (Fridays)', totals.both, `-${rem.both} left`)
+function renderProgress(plan, today){
+  const sessions = countSessions(plan);
+  const progress = document.getElementById('progressCards');
+  progress.innerHTML = [
+    progressCard('Chemo Sessions', sessions.completedChemo, sessions.totalChemo, 'chemo'),
+    progressCard('Radiation Sessions', sessions.completedRadiation, sessions.totalRadiation, 'radiation'),
+    metricCard('Days Until Radiation End', calendarDaysLeft(RADIATION_END, today)),
+    metricCard('Total Treatment Days', plan.length)
   ].join('');
-  top.after(row2);
 }
 
 function renderNext(remaining, today){
@@ -252,10 +270,11 @@ function activatePills(plan, completed, remaining, today){
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // local midnight
 
-  const plan = buildPlan(START, END_DATE);
+  const plan = buildPlan();
   const {completed, remaining} = splitProgress(plan, today);
 
-  renderTop(plan, completed, remaining, today);
+  renderTop(plan, today);
+  renderProgress(plan, today);
   renderNext(remaining, today);
   activatePills(plan, completed, remaining, today);
 })();
