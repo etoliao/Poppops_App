@@ -50,8 +50,8 @@
 <div class="wrap">
   <header>
     <h1>⏳ Cancer Treatment Countdown</h1>
-    <p>Chemo on Fridays • Radiation Monday–Friday • 8 weeks starting Oct 20, 2025<br>
-       (No radiation on Thu Oct 23, 2025 and Fri Oct 24, 2025)</p>
+    <p>Chemo on Fridays • Radiation Monday–Friday • Ends December 15, 2025<br>
+       (No treatment on weekends)</p>
   </header>
 
   <div class="cards" id="topCards"></div>
@@ -79,17 +79,15 @@
 <script>
 /* --- Config --- */
 const START = new Date(Date.UTC(2025, 9, 20)); // Mon Oct 20, 2025 (UTC midnight)
-const WEEKS = 8;
+const END_DATE = new Date(Date.UTC(2025, 11, 15)); // Dec 15, 2025 (UTC midnight)
 
 /* Radiation exceptions (skip radiation on these dates).
    Format: 'YYYY-MM-DD' (UTC). */
 const RADIATION_SKIP = new Set([
-  '2025-10-23', // Thu
-  '2025-10-24'  // Fri (chemo still occurs on this day)
+  // No specific radiation skip dates - only weekends are skipped
 ]);
 
-/* If you ALSO want to skip chemo on Fri 2025-10-24, uncomment the next line: */
-// const CHEMO_SKIP = new Set(['2025-10-24']);
+/* If you ALSO want to skip chemo on specific dates, add them here: */
 const CHEMO_SKIP = new Set(); // default: chemo happens on all Fridays
 
 /* --- Helpers --- */
@@ -100,26 +98,29 @@ const fmtShort = d => d.toLocaleDateString(undefined,{month:'2-digit',day:'2-dig
 const wd = d => d.getUTCDay(); // 0=Sun .. 6=Sat (UTC to keep date logic stable)
 const addDaysUTC = (d,n)=> new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()+n));
 
-/* Build per-day plan: fields: date, weekdayName, radiation(bool), chemo(bool), both(bool) */
-function buildPlan(startDate, weeks){
-  const days = weeks*7;
+/* Build per-day plan from start to end date, excluding weekends */
+function buildPlan(startDate, endDate){
   const rows = [];
-  for(let i=0;i<days;i++){
-    const d = addDaysUTC(startDate, i);
-    const day = wd(d); // 1..5 are Mon..Fri
-    if (day>=1 && day<=5){
-      const key = toKey(d);
-      const isFriday = (day===5);
+  let currentDate = new Date(startDate);
+  
+  while(currentDate <= endDate){
+    const day = wd(currentDate); // 0=Sun, 1=Mon, ..., 6=Sat
+    // Only include weekdays (Monday-Friday)
+    if(day >= 1 && day <= 5){
+      const key = toKey(currentDate);
+      const isFriday = (day === 5);
       const radiation = !RADIATION_SKIP.has(key);               // skip on specified dates
       const chemo = isFriday && !CHEMO_SKIP.has(key);           // chemo only on Fridays unless skipped
       rows.push({
-        date: d,
-        weekdayName: d.toLocaleDateString(undefined,{weekday:'long'}),
+        date: new Date(currentDate),
+        weekdayName: currentDate.toLocaleDateString(undefined,{weekday:'long'}),
         radiation,
         chemo,
         both: radiation && chemo
       });
     }
+    // Move to next day
+    currentDate.setUTCDate(currentDate.getUTCDate() + 1);
   }
   return rows;
 }
@@ -251,7 +252,7 @@ function activatePills(plan, completed, remaining, today){
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // local midnight
 
-  const plan = buildPlan(START, WEEKS);
+  const plan = buildPlan(START, END_DATE);
   const {completed, remaining} = splitProgress(plan, today);
 
   renderTop(plan, completed, remaining, today);
